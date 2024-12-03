@@ -201,10 +201,10 @@ def main():
 
     except_model_names = [args.except_models] if isinstance(args.except_models, str) else args.except_models
     model_names = [m for m in model_names if m not in except_model_names]
-    model_names = list(set(model_names))
+    model_names = sorted(list(set(model_names)))
 
     temperatures = args.temperature if isinstance(args.temperature, list) else [args.temperature]
-    temperatures = list(set(temperatures))
+    temperatures = sorted(list(set(temperatures)))
 
     last_model_name = ""
     loop = tqdm(
