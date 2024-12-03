@@ -78,7 +78,9 @@ def load_and_tokenize_wikitext(
     if shuffle:
         df = df.sample(n=len(df), seed=seed)
     texts = [text for text in df["text"].to_list() if len(text) > 128*5][:n_texts]
-    return [tokenizer(text, return_tensors="pt") for text in texts]
+    dataset = [tokenizer(text, return_tensors="pt") for text in texts]
+    assert all(sample.input_ids.shape[-1] != 0 for sample in dataset)
+    return dataset
 
 
 def measure_compression(
@@ -107,6 +109,7 @@ def measure_compression(
         ) 
         input_ids = inputs["input_ids"].to(device)
         n_tokens_in = input_ids.shape[-1]
+        assert n_tokens_in > 0, f"{input_ids.shape=}"
         attention_mask = inputs["attention_mask"].to(device)
 
         output_ids = model.generate(input_ids=input_ids, attention_mask=attention_mask)
