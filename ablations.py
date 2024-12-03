@@ -142,13 +142,13 @@ def measure_compression(
         # Write results
         df = pl.DataFrame(
             {
-                "model_name": [model_name],
-                "temperature": [temperature],
-                "window_size": [window_size],
-                "n_tokens_in": [n_tokens_in],
-                "n_tokens_out": [n_tokens_out],
-                "n_tokens_reduced": [n_tokens_out_reduced],
-                "compression_ratio": [compression_ratio],
+                "model_name": [str(model_name)],
+                "temperature": [float(temperature)],
+                "window_size": [int(window_size)],
+                "n_tokens_in": [int(n_tokens_in)],
+                "n_tokens_out": [int(n_tokens_out)],
+                "n_tokens_reduced": [int(n_tokens_out_reduced)],
+                "compression_ratio": [float(compression_ratio)],
                 "n_tokens_out_reduced_window": [str(n_tokens_out_reduced_window_list)],
                 "compression_ratio_window": [str(compression_ratios_window_list)],
                 "prompt": [tokenizer.batch_decode(input_ids, skip_special_tokens=True)[0]],
