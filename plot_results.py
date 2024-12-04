@@ -3,15 +3,18 @@
 # dependencies = [
 #   "polars",
 #   "matplotlib",
+#   "seaborn",
 #   "numpy",
 # ]
 # ///
 
+import ast
 from typing import Callable, Literal
 
 import polars as pl
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 
 
 def _get_y(df: pl.DataFrame, x: np.ndarray, op: Callable[[pl.Series], float]) -> np.ndarray:
@@ -93,7 +96,84 @@ def plot_all_models(
     plt.show()
 
 
+def plot_compression_heatmap(
+    df: pl.DataFrame,
+    model_name: str,
+    figsize: tuple[int, int] = (12, 8)
+) -> None:
+    model_df = df.filter(pl.col("model_name") == model_name)
+    temps = sorted(model_df["temperature"].unique().to_list(), reverse=True)
+    ratios_by_temp = []
+    
+    for temp in temps:
+        temp_ratios = model_df.filter(pl.col("temperature") == temp)["compression_ratio_window"]
+        ratio_lists = [ast.literal_eval(x) for x in temp_ratios]
+        min_len = min(len(x) for x in ratio_lists)
+        truncated = [x[:min_len] for x in ratio_lists]
+        avg_ratios = np.mean(truncated, axis=0)
+        ratios_by_temp.append(avg_ratios)
+    
+    matrix = np.array(ratios_by_temp)
+    
+    plt.figure(figsize=figsize)
+    ax = sns.heatmap(
+        matrix,
+        cmap="YlOrRd",
+        yticklabels=temps,
+        xticklabels=range(min_len),
+        cbar_kws={"label": "Compression Ratio"},
+        fmt='.3f',
+        annot=True,
+        annot_kws={'size': 8}
+    )
+    
+    plt.xticks(rotation=0)
+    plt.title(f"Compression Ratios by Temperature and Window Position\nModel: {model_name}")
+    plt.xlabel("Window Position")
+    plt.ylabel("Temperature")
+    plt.tight_layout()
+    plt.show()
+    
+    return plt.gcf()
+
+
+def plot_compression_by_window(
+    df: pl.DataFrame,
+    model_name: str,
+    figsize: tuple[int, int] = (12, 8),
+    reduction: Literal["mean", "max"] = "mean",
+    temperature: float | None = None,
+) -> None:
+    model_df = df.filter(pl.col("model_name") == model_name)
+    temps = sorted(model_df["temperature"].unique().to_list(), reverse=True)
+    ratios_by_temp = []
+    
+    for temp in temps:
+        temp_ratios = model_df.filter(pl.col("temperature") == temp)["compression_ratio_window"]
+        ratio_lists = [ast.literal_eval(x) for x in temp_ratios]
+        min_len = min(len(x) for x in ratio_lists)
+        truncated = [x[:min_len] for x in ratio_lists]
+        avg_ratios = np.mean(truncated, axis=0)
+        ratios_by_temp.append(avg_ratios)
+    
+    matrix = np.array(ratios_by_temp)
+    if temperature is not None:
+        matrix = matrix[temps.index(temperature)]
+    else:
+        matrix = np.mean(matrix, axis=0) if reduction == "mean" else np.max(matrix, axis=0)
+    
+    plt.figure(figsize=figsize)
+    plt.plot(matrix, marker="o")
+    plt.xlabel("Window Position")
+    plt.ylabel(f"Compression Ratio ({reduction})")
+    plt.grid()
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
     df = pl.read_csv("results.csv")
+    # plot_compression_by_window(df, "pythia-410m", reduction="mean", temperature=1.4)
+    # plot_compression_heatmap(df, "pythia-70m")
     # plot_single_model(df, "pythia-410m")
     plot_all_models(df, "count_rel")
