@@ -5,6 +5,7 @@
 #   "matplotlib",
 #   "seaborn",
 #   "numpy",
+#   "scipy",
 # ]
 # ///
 
@@ -15,6 +16,7 @@ import polars as pl
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+from scipy import stats
 
 
 def _get_y(df: pl.DataFrame, x: np.ndarray, op: Callable[[pl.Series], float]) -> np.ndarray:
@@ -49,7 +51,7 @@ def get_xy(
 
 def get_yaxis_label(compression: Literal["mean", "max", "min", "count_abs", "count_rel"] = "mean"):
     if compression in ("mean", "max", "min"):
-        return f"{compression} compression ratio [%]"
+        return f"{compression} compression"
     elif compression == "count_abs":
         return "Number of completions with compression > 0"
     elif compression == "count_rel":
@@ -62,6 +64,7 @@ def plot_single_model(
         df: pl.DataFrame, 
         model_name: str, 
         compression: Literal["mean", "max", "min", "count_abs", "count_rel"] = "mean",
+        show: bool = True,
 ):
     df = df.filter(pl.col("model_name") == model_name)
     df = df.sort(pl.col("temperature"))
@@ -72,108 +75,139 @@ def plot_single_model(
     plt.xlabel("Temperature")
     plt.xticks(x.tolist())
     plt.ylabel(get_yaxis_label(compression))
+    plt.title(
+        "Compression = (uncompressed - compressed) / uncompressed); \n"
+        "uncompressed = llm(query), compressed = tokenizer(decode(llm(query)))"
+    )
     plt.legend()
     plt.grid()
-    plt.show()
+    if show:
+        plt.show()
+    else:
+        plt.savefig(f"plots/single_model_{model_name}_{compression}.png")
 
 
 def plot_all_models(
         df: pl.DataFrame, 
-        compression: Literal["mean", "max", "min", "count_abs", "count_rel"] = "mean"
+        compression: Literal["mean", "max", "min", "count_abs", "count_rel"] = "mean",
+        temp_range: tuple[float, float] = (0.0, 2.0),
+        show: bool = True,
 ):
-    df = df.sort(pl.col("model_name"))
+    model_names = [
+        model_name for model_name in
+        (
+            "pythia-70m", "pythia-160m", 
+            "pythia-410m", "pythia-1b", "pythia-1.4b", 
+            "pythia-2.8b", "pythia-6.9b", "pythia-12b",
+        )
+        if model_name in df["model_name"].unique()
+    ]
     
-    plt.figure(figsize=(10, 5))
-    for model_name in df["model_name"].unique():
+    plt.figure(figsize=(8, 5))
+    for model_name in model_names:
         df_local = df.filter(pl.col("model_name") == model_name)
         x, y = get_xy(df_local, compression)
+        valid_temp_indices = np.where(np.logical_and(x >= temp_range[0], x <= temp_range[1]))[0]
+        x = x[valid_temp_indices]
+        y = y[valid_temp_indices]
         plt.plot(x, y, label=model_name, marker="o")
     plt.xlabel("Temperature")
     plt.xticks(x.tolist())
     plt.ylabel(get_yaxis_label(compression))
+    plt.title(
+        "Compression = (llm(query) - tokenizer(decode(llm(query)))) / llm(query)"
+    )
+    plt.tight_layout()
     plt.grid()
     plt.legend()
-    plt.show()
+    if show:
+        plt.show()
+    else:
+        savename = f"plots/all_models_{compression}"
+        if temp_range[0] != 0.0 or temp_range[1] != 2.0:
+            savename += f"_{temp_range[0]}-{temp_range[1]}"
+        plt.savefig(savename + ".png", dpi=300)
 
 
-def plot_compression_heatmap(
+def plot_compression_center(
     df: pl.DataFrame,
     model_name: str,
-    figsize: tuple[int, int] = (12, 8)
+    figsize: tuple[int, int] = (10, 6),
+    show: bool = True,
 ) -> None:
     model_df = df.filter(pl.col("model_name") == model_name)
-    temps = sorted(model_df["temperature"].unique().to_list(), reverse=True)
-    ratios_by_temp = []
+    temps = sorted(model_df["temperature"].unique().to_list())
+    centers = []
+    center_sems = []  # Standard error of means
     
     for temp in temps:
         temp_ratios = model_df.filter(pl.col("temperature") == temp)["compression_ratio_window"]
         ratio_lists = [ast.literal_eval(x) for x in temp_ratios]
         min_len = min(len(x) for x in ratio_lists)
         truncated = [x[:min_len] for x in ratio_lists]
-        avg_ratios = np.mean(truncated, axis=0)
-        ratios_by_temp.append(avg_ratios)
+        
+        # Calculate center of gravity for each sample
+        sample_centers = []
+        for sample in truncated:
+            # Convert to numpy array and get positions
+            ratios = np.array(sample)
+            positions = np.arange(len(ratios))
+            
+            # Only consider positive compression values for center calculation
+            mask = ratios > 0
+            if mask.any():  # If there are any positive compression values
+                center = np.average(positions[mask], weights=ratios[mask])
+                sample_centers.append(center)
+        
+        if sample_centers:
+            centers.append(np.mean(sample_centers))
+            center_sems.append(stats.sem(sample_centers))
+        else:
+            centers.append(np.nan)
+            center_sems.append(np.nan)
     
-    matrix = np.array(ratios_by_temp)
-    
+    # Plot
     plt.figure(figsize=figsize)
-    ax = sns.heatmap(
-        matrix,
-        cmap="YlOrRd",
-        yticklabels=temps,
-        xticklabels=range(min_len),
-        cbar_kws={"label": "Compression Ratio"},
-        fmt='.3f',
-        annot=True,
-        annot_kws={'size': 8}
-    )
-    
-    plt.xticks(rotation=0)
-    plt.title(f"Compression Ratios by Temperature and Window Position\nModel: {model_name}")
-    plt.xlabel("Window Position")
-    plt.ylabel("Temperature")
+    plt.errorbar(temps, centers, yerr=center_sems, fmt='o-', capsize=5)
+
+    window_size = model_df["window_size"].unique().to_list()[0]
+    xticklabels = [f"{i*window_size}-{(i+1)*window_size}" for i in range(min_len)]
+    plt.yticks(np.arange(len(xticklabels)), xticklabels)
+
+    # Add horizontal line at median position
+    median_pos = (len(xticklabels) - 1) / 2
+    plt.axhline(y=median_pos, color='r', linestyle='--', alpha=0.5, label='Median position')
+
+    plt.xticks(temps, temps)
+    plt.legend()
+
+    plt.title(f"Compression: 'center of gravity' vs Temperature\nModel: {model_name}")
+    plt.xlabel("Temperature")
+    plt.ylabel("Token position")
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.show()
+
+    if show:
+        plt.show()
+    else:
+        plt.savefig(f"plots/compression_center_{model_name}.png", dpi=300)
     
     return plt.gcf()
 
 
-def plot_compression_by_window(
-    df: pl.DataFrame,
-    model_name: str,
-    figsize: tuple[int, int] = (12, 8),
-    reduction: Literal["mean", "max"] = "mean",
-    temperature: float | None = None,
-) -> None:
-    model_df = df.filter(pl.col("model_name") == model_name)
-    temps = sorted(model_df["temperature"].unique().to_list(), reverse=True)
-    ratios_by_temp = []
-    
-    for temp in temps:
-        temp_ratios = model_df.filter(pl.col("temperature") == temp)["compression_ratio_window"]
-        ratio_lists = [ast.literal_eval(x) for x in temp_ratios]
-        min_len = min(len(x) for x in ratio_lists)
-        truncated = [x[:min_len] for x in ratio_lists]
-        avg_ratios = np.mean(truncated, axis=0)
-        ratios_by_temp.append(avg_ratios)
-    
-    matrix = np.array(ratios_by_temp)
-    if temperature is not None:
-        matrix = matrix[temps.index(temperature)]
-    else:
-        matrix = np.mean(matrix, axis=0) if reduction == "mean" else np.max(matrix, axis=0)
-    
-    plt.figure(figsize=figsize)
-    plt.plot(matrix, marker="o")
-    plt.xlabel("Window Position")
-    plt.ylabel(f"Compression Ratio ({reduction})")
-    plt.grid()
-    plt.tight_layout()
-    plt.show()
-
-
 if __name__ == "__main__":
     df = pl.read_csv("results.csv")
-    # plot_compression_by_window(df, "pythia-410m", reduction="mean", temperature=1.4)
-    # plot_compression_heatmap(df, "pythia-70m")
+    # plot_compression_by_window(
+    #     df=df, 
+    #     model_name=None, 
+    #     reduction="mean",
+    #     temperature=0.8,
+    #     show=False,
+    #     figsize=(12, 5),
+    #     average_over_models=True,
+    # )
+    # plot_compression_heatmap(df, "pythia-12b", reduction="mean", show=False)
     # plot_single_model(df, "pythia-410m")
-    plot_all_models(df, "count_rel")
+    # plot_all_models(df, "count_rel", show=False, temp_range=(0.0, 2.0))
+
+    plot_compression_center(df, "pythia-12b", show=False)
