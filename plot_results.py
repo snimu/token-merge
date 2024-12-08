@@ -129,6 +129,120 @@ def plot_all_models(
         plt.savefig(savename + ".png", dpi=300)
 
 
+def plot_compression_heatmap(
+    df: pl.DataFrame,
+    model_name: str,
+    figsize: tuple[int, int] = (16, 8),
+    reduction: Literal["mean", "max"] = "mean",
+    show: bool = True,
+) -> None:
+    model_df = df.filter(pl.col("model_name") == model_name)
+    temps = sorted(model_df["temperature"].unique().to_list(), reverse=True)
+    ratios_by_temp = []
+    
+    for temp in temps:
+        temp_ratios = model_df.filter(pl.col("temperature") == temp)["compression_ratio_window"]
+        ratio_lists = [ast.literal_eval(x) for x in temp_ratios]
+        min_len = min(len(x) for x in ratio_lists)
+        truncated = [x[:min_len] for x in ratio_lists]
+        avg_ratios = np.mean(truncated, axis=0) if reduction == "mean" else np.max(truncated, axis=0)
+        ratios_by_temp.append(avg_ratios)
+    
+    matrix = np.array(ratios_by_temp)
+
+    window_size = model_df["window_size"].unique().to_list()[0]
+    xticklabels = [f"{i*window_size}-{(i+1)*window_size}" for i in range(min_len)]
+    
+    plt.figure(figsize=figsize)
+    _ = sns.heatmap(
+        matrix,
+        cmap="YlOrRd",
+        yticklabels=temps,
+        xticklabels=xticklabels,
+        cbar_kws={"label": "Compression"},
+        fmt='.4f',
+        annot=True,
+        annot_kws={'size': 8}
+    )
+    
+    num_samples = model_df.filter(pl.col("temperature") == temps[0])["completion"].count()
+    plt.xticks(rotation=0)
+    plt.title(
+        f"{reduction.capitalize()} compression by Temperature and Token Position, "
+        f"over {num_samples} completions"
+        f"\nModel: {model_name}"
+    )
+    plt.xlabel("Token Position")
+    plt.ylabel("Temperature")
+    plt.tight_layout()
+    if show:
+        plt.show()
+    else:
+        plt.savefig(f"plots/heatmap_{model_name}_{reduction}.png")
+    
+    return plt.gcf()
+
+
+def plot_compression_by_window(
+    df: pl.DataFrame,
+    model_name: str | None = None,
+    average_over_models: bool = False,
+    figsize: tuple[int, int] = (12, 5),
+    reduction: Literal["mean", "max"] = "mean",
+    temperature: float | None = None,
+    show: bool = True,
+) -> None:
+    models = [model_name] if model_name else df["model_name"].unique().to_list()
+    plt.figure(figsize=figsize)
+    plots = []
+    for mname in models:
+        model_df = df.filter(pl.col("model_name") == mname)
+        temps = sorted(model_df["temperature"].unique().to_list(), reverse=True)
+        ratios_by_temp = []
+        
+        for temp in temps:
+            temp_ratios = model_df.filter(pl.col("temperature") == temp)["compression_ratio_window"]
+            ratio_lists = [ast.literal_eval(x) for x in temp_ratios]
+            min_len = min(len(x) for x in ratio_lists)
+            truncated = [x[:min_len] for x in ratio_lists]
+            avg_ratios = np.mean(truncated, axis=0)
+            ratios_by_temp.append(avg_ratios)
+        
+        matrix = np.array(ratios_by_temp)
+        if temperature is not None:
+            matrix = matrix[temps.index(temperature)]
+        else:
+            matrix = np.mean(matrix, axis=0) if reduction == "mean" else np.max(matrix, axis=0)
+        plots.append((matrix, mname))
+
+    if average_over_models:
+        matrix = np.mean(np.array([x[0] for x in plots]), axis=0)
+        plots = [(matrix, f"average over {len(models)} models")]
+    
+    for matrix, mname in plots:
+        plt.plot(matrix, marker="o", label=mname)
+    
+    num_samples = model_df.filter(pl.col("temperature") == temps[0])["completion"].count()
+    window_size = model_df["window_size"].unique().to_list()[0]
+    xticklabels = [f"{i*window_size}-{(i+1)*window_size}" for i in range(min_len)]
+    plt.xticks(np.arange(len(xticklabels)), xticklabels)
+    plt.xlabel("Token Position")
+    plt.ylabel(f"Compression ({reduction}) over {num_samples} completions")
+    plt.grid()
+    plt.legend()
+    plt.tight_layout()
+    if show:
+        plt.show()
+    else:
+        savename = "plots/window"
+        if model_name is not None:
+            savename += f"_{model_name}"
+        savename += f"_{reduction}_temp{temperature}"
+        if average_over_models:
+            savename += "_average"
+        plt.savefig(savename + ".png", dpi=300)
+
+
 def plot_compression_center(
     df: pl.DataFrame,
     model_name: str,
@@ -206,8 +320,6 @@ if __name__ == "__main__":
     #     figsize=(12, 5),
     #     average_over_models=True,
     # )
-    # plot_compression_heatmap(df, "pythia-12b", reduction="mean", show=False)
+    plot_compression_heatmap(df, "pythia-12b", reduction="mean", show=False)
     # plot_single_model(df, "pythia-410m")
     # plot_all_models(df, "count_rel", show=False, temp_range=(0.0, 2.0))
-
-    plot_compression_center(df, "pythia-12b", show=False)
