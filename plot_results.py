@@ -245,37 +245,40 @@ def plot_compression_by_window(
 
 def plot_compression_center(
     df: pl.DataFrame,
-    model_name: str,
+    model_name: str | None = None,
     figsize: tuple[int, int] = (10, 6),
     show: bool = True,
 ) -> None:
-    model_df = df.filter(pl.col("model_name") == model_name)
-    temps = sorted(model_df["temperature"].unique().to_list())
+    if model_name is not None:
+        df = df.filter(pl.col("model_name") == model_name)
+    
+    temps = sorted(df["temperature"].unique().to_list())
+    unique_models = df["model_name"].unique().to_list()
     centers = []
     center_sems = []  # Standard error of means
     
     for temp in temps:
-        temp_ratios = model_df.filter(pl.col("temperature") == temp)["compression_ratio_window"]
-        ratio_lists = [ast.literal_eval(x) for x in temp_ratios]
-        min_len = min(len(x) for x in ratio_lists)
-        truncated = [x[:min_len] for x in ratio_lists]
+        temp_df = df.filter(pl.col("temperature") == temp)
+        all_centers = []  # Store centers from all models at this temperature
         
-        # Calculate center of gravity for each sample
-        sample_centers = []
-        for sample in truncated:
-            # Convert to numpy array and get positions
-            ratios = np.array(sample)
-            positions = np.arange(len(ratios))
+        for model in unique_models:
+            model_ratios = temp_df.filter(pl.col("model_name") == model)["compression_ratio_window"]
+            ratio_lists = [ast.literal_eval(x) for x in model_ratios]
+            min_len = min(len(x) for x in ratio_lists)
+            truncated = [x[:min_len] for x in ratio_lists]
             
-            # Only consider positive compression values for center calculation
-            mask = ratios > 0
-            if mask.any():  # If there are any positive compression values
-                center = np.average(positions[mask], weights=ratios[mask])
-                sample_centers.append(center)
+            # Calculate center of gravity for each sample
+            for sample in truncated:
+                ratios = np.array(sample)
+                positions = np.arange(len(ratios))
+                mask = ratios > 0
+                if mask.any():
+                    center = np.average(positions[mask], weights=ratios[mask])
+                    all_centers.append(center)
         
-        if sample_centers:
-            centers.append(np.mean(sample_centers))
-            center_sems.append(stats.sem(sample_centers))
+        if all_centers:
+            centers.append(np.mean(all_centers))
+            center_sems.append(stats.sem(all_centers))
         else:
             centers.append(np.nan)
             center_sems.append(np.nan)
@@ -284,7 +287,7 @@ def plot_compression_center(
     plt.figure(figsize=figsize)
     plt.errorbar(temps, centers, yerr=center_sems, fmt='o-', capsize=5)
 
-    window_size = model_df["window_size"].unique().to_list()[0]
+    window_size = df["window_size"].unique().to_list()[0]
     xticklabels = [f"{i*window_size}-{(i+1)*window_size}" for i in range(min_len)]
     plt.yticks(np.arange(len(xticklabels)), xticklabels)
 
@@ -295,7 +298,7 @@ def plot_compression_center(
     plt.xticks(temps, temps)
     plt.legend()
 
-    plt.title(f"Compression: 'center of gravity' vs Temperature\nModel: {model_name}")
+    plt.title(f"Compression: 'center of gravity' vs Temperature\nModel: {model_name or 'all models'}")
     plt.xlabel("Temperature")
     plt.ylabel("Token position")
     plt.grid(True, alpha=0.3)
@@ -304,7 +307,7 @@ def plot_compression_center(
     if show:
         plt.show()
     else:
-        plt.savefig(f"plots/compression_center_{model_name}.png", dpi=300)
+        plt.savefig(f"plots/compression_center_{model_name or 'all'}.png", dpi=300)
     
     return plt.gcf()
 
@@ -320,6 +323,7 @@ if __name__ == "__main__":
     #     figsize=(12, 5),
     #     average_over_models=True,
     # )
-    plot_compression_heatmap(df, "pythia-12b", reduction="mean", show=False)
+    # plot_compression_heatmap(df, model_name="pythia-12b", reduction="mean", show=True)
     # plot_single_model(df, "pythia-410m")
     # plot_all_models(df, "count_rel", show=False, temp_range=(0.0, 2.0))
+    plot_compression_center(df, model_name=None, show=False)
